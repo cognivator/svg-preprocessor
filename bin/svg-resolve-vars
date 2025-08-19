@@ -11,14 +11,26 @@ function resolveVariables(svgContent) {
   
   const styleElements = document.querySelectorAll('style');
   
+  // First pass: collect all CSS from all style elements
+  let allCSS = '';
+  styleElements.forEach(styleElement => {
+    const cssText = styleElement.textContent;
+    if (cssText.trim()) {
+      allCSS += cssText + '\n';
+    }
+  });
+  
+  if (!allCSS.trim()) return dom.serialize();
+  
+  // Resolve all variables using the complete CSS
+  const resolver = new CSSResolver();
+  const resolvedVars = resolver.resolveVariables(allCSS);
+  
+  // Second pass: update each style element with resolved values
   styleElements.forEach(styleElement => {
     const cssText = styleElement.textContent;
     if (!cssText.trim()) return;
     
-    const resolver = new CSSResolver();
-    const resolvedVars = resolver.resolveVariables(cssText);
-    
-    // Parse CSS and replace variable definitions with resolved values
     try {
       const ast = csstree.parse(cssText);
       
@@ -31,7 +43,7 @@ function resolveVariables(svgContent) {
       // Update the style element with resolved CSS
       styleElement.textContent = csstree.generate(ast);
     } catch (error) {
-      console.error('Warning: Could not parse CSS, leaving unchanged:', error.message);
+      console.error('Warning: Could not parse CSS in style element, leaving unchanged:', error.message);
     }
   });
   

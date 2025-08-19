@@ -18,13 +18,16 @@ function convertColors(svgContent) {
     let cssText = styleElement.textContent;
     if (!cssText.trim()) return;
     
-    // Find and replace color values in CSS variable definitions
-    cssText = cssText.replace(/(--[a-zA-Z-_]+)\s*:\s*([^;}]+)/g, (match, varName, value) => {
+    // Find and replace only literal color values (not var() references)
+    cssText = cssText.replace(/(--[a-zA-Z0-9-_]+)\s*:\s*([^;}]+)/g, (match, varName, value) => {
       const trimmedValue = value.trim();
-      if (converter.isColor(trimmedValue)) {
+      
+      // Only convert if it's a literal color (not a var() reference)
+      if (!trimmedValue.includes('var(') && converter.isColor(trimmedValue)) {
         const hexColor = converter.toHex(trimmedValue);
         return `${varName}: ${hexColor}`;
       }
+      
       return match;
     });
     
