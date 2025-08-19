@@ -1,0 +1,87 @@
+#!/usr/bin/env node
+
+const fs = require('fs');
+const { JSDOM } = require('jsdom');
+const CSSResolver = require('../lib/css-resolver');
+const csstree = require('css-tree');
+
+function resolveVariables(svgContent) {
+  const dom = new JSDOM(svgContent, { contentType: 'image/svg+xml' });
+  const document = dom.window.document;
+  
+  const styleElements = document.querySelectorAll('style');
+  
+  styleElements.forEach(styleElement => {
+    const cssText = styleElement.textContent;
+    if (!cssText.trim()) return;
+    
+    const resolver = new CSSResolver();
+    const resolvedVars = resolver.resolveVariables(cssText);
+    
+    // Parse CSS and replace variable definitions with resolved values
+    try {
+      const ast = csstree.parse(cssText);
+      
+      csstree.walk(ast, (node) => {
+        if (node.type === 'Rule' && isRootRule(node)) {
+          replaceVariableDefinitions(node, resolvedVars);
+        }
+      });
+      
+      // Update the style element with resolved CSS
+      styleElement.textContent = csstree.generate(ast);
+    } catch (error) {
+      console.error('Warning: Could not parse CSS, leaving unchanged:', error.message);
+    }
+  });
+  
+  return dom.serialize();
+}
+
+function isRootRule(node) {
+  if (!node.prelude?.children) return false;
+  let hasRoot = false;
+  csstree.walk(node.prelude, (child) => {
+    if (child.type === 'PseudoClassSelector' && child.name === 'root') hasRoot = true;
+  });
+  return hasRoot;
+}
+
+function replaceVariableDefinitions(ruleNode, resolvedVars) {
+  csstree.walk(ruleNode, (node) => {
+    if (node.type === 'Declaration' && node.property.startsWith('--')) {
+      const varName = node.property.substring(2);
+      if (resolvedVars[varName]) {
+        // Replace the value with the resolved value
+        try {
+          node.value = csstree.parse(resolvedVars[varName], { context: 'value' });
+        } catch (error) {
+          console.error(`Warning: Could not parse resolved value for --${varName}:`, error.message);
+        }
+      }
+    }
+  });
+}
+
+const inputFile = process.argv[2];
+if (inputFile && inputFile !== '-') {
+  try {
+    const content = fs.readFileSync(inputFile, 'utf8');
+    process.stdout.write(resolveVariables(content));
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+} else {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => input += chunk);
+  process.stdin.on('end', () => {
+    try {
+      process.stdout.write(resolveVariables(input));
+    } catch (error) {
+      console.error('Error:', error.message);
+      process.exit(1);
+    }
+  });
+}

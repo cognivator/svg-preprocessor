@@ -1,0 +1,24 @@
+{
+  "name": "svg-css-preprocessor",
+  "version": "1.0.0",
+  "description": "Resolve CSS variables and convert colors in SVG files for print compatibility",
+  "main": "svg-preprocessor.js",
+  "bin": {
+    "svg-preprocess": "./svg-preprocessor.js",
+    "svg-resolve-vars": "./bin/svg-resolve-vars",
+    "svg-convert-colors": "./bin/svg-convert-colors", 
+    "svg-apply-styles": "./bin/svg-apply-styles",
+    "svg-cleanup": "./bin/svg-cleanup"
+  },
+  "scripts": {
+    "test": "node test.js",
+    "test-pipeline": "node test-pipeline.js"
+  },
+  "dependencies": {
+    "jsdom": "^24.0.0",
+    "css-tree": "^3.1.0", 
+    "color-convert": "^2.0.1",
+    "commander": "^12.0.0"
+  },
+  "engines": { "node": ">=16.0.0" }
+}

@@ -1,0 +1,133 @@
+#!/usr/bin/env node
+
+const fs = require('fs');
+const { JSDOM } = require('jsdom');
+const csstree = require('css-tree');
+
+function resolveVarReference(value, variables) {
+  const varMatch = value.match(/var\(--([^,)]+)(?:,([^)]*))?\)/);
+  if (varMatch) {
+    const varName = varMatch[1].trim();
+    const fallback = varMatch[2] ? varMatch[2].trim() : null;
+    return variables[varName] || fallback || null;
+  }
+  return null;
+}
+
+function replaceVarsInStyle(styleValue, variables) {
+  return styleValue.replace(/var\(--([^,)]+)(?:,([^)]*))?\)/g, (match, varName, fallback) => {
+    const resolvedValue = variables[varName.trim()];
+    return resolvedValue || (fallback ? fallback.trim() : match);
+  });
+}
+
+function extractVariablesFromCSS(cssText) {
+  const variables = {};
+  
+  try {
+    const ast = csstree.parse(cssText);
+    
+    csstree.walk(ast, (node) => {
+      if (node.type === 'Rule' && isRootRule(node)) {
+        extractVariablesFromRule(node, variables);
+      }
+    });
+  } catch (error) {
+    console.error('Warning: Could not parse CSS for variable extraction:', error.message);
+  }
+  
+  return variables;
+}
+
+function isRootRule(node) {
+  if (!node.prelude?.children) return false;
+  let hasRoot = false;
+  csstree.walk(node.prelude, (child) => {
+    if (child.type === 'PseudoClassSelector' && child.name === 'root') hasRoot = true;
+  });
+  return hasRoot;
+}
+
+function extractVariablesFromRule(ruleNode, variables) {
+  csstree.walk(ruleNode, (node) => {
+    if (node.type === 'Declaration' && node.property.startsWith('--')) {
+      const varName = node.property.substring(2);
+      const value = csstree.generate(node.value);
+      variables[varName] = value;
+    }
+  });
+}
+
+function applyStyles(svgContent) {
+  const dom = new JSDOM(svgContent, { contentType: 'image/svg+xml' });
+  const document = dom.window.document;
+  const svgElement = document.querySelector('svg');
+  
+  if (!svgElement) throw new Error('No SVG element found');
+  
+  // Extract variables from current style elements
+  const styleElements = document.querySelectorAll('style');
+  let allVariables = {};
+  
+  styleElements.forEach(styleElement => {
+    const cssText = styleElement.textContent;
+    if (cssText.trim()) {
+      const variables = extractVariablesFromCSS(cssText);
+      allVariables = { ...allVariables, ...variables };
+    }
+  });
+  
+  // Apply variables to SVG attributes
+  document.querySelectorAll('*').forEach(element => {
+    // Process fill/stroke attributes with var() references
+    ['fill', 'stroke'].forEach(attr => {
+      const value = element.getAttribute(attr);
+      if (value && value.includes('var(')) {
+        const resolved = resolveVarReference(value, allVariables);
+        if (resolved) element.setAttribute(attr, resolved);
+      }
+    });
+    
+    // Process style attributes
+    const style = element.getAttribute('style');
+    if (style && style.includes('var(')) {
+      element.setAttribute('style', replaceVarsInStyle(style, allVariables));
+    }
+    
+    // Process class-based styling
+    const className = element.getAttribute('class');
+    if (className) {
+      const possibleVars = [className, className.replace('-', '_')];
+      for (const varName of possibleVars) {
+        if (allVariables[varName]) {
+          element.setAttribute('fill', allVariables[varName]);
+          break;
+        }
+      }
+    }
+  });
+  
+  return dom.serialize();
+}
+
+const inputFile = process.argv[2];
+if (inputFile && inputFile !== '-') {
+  try {
+    process.stdout.write(applyStyles(fs.readFileSync(inputFile, 'utf8')));
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+} else {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => input += chunk);
+  process.stdin.on('end', () => {
+    try {
+      process.stdout.write(applyStyles(input));
+    } catch (error) {
+      console.error('Error:', error.message);
+      process.exit(1);
+    }
+  });
+}
