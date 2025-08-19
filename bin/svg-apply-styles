@@ -2,59 +2,66 @@
 
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
-const csstree = require('css-tree');
-
-function resolveVarReference(value, variables) {
-  const varMatch = value.match(/var\(--([^,)]+)(?:,([^)]*))?\)/);
-  if (varMatch) {
-    const varName = varMatch[1].trim();
-    const fallback = varMatch[2] ? varMatch[2].trim() : null;
-    return variables[varName] || fallback || null;
-  }
-  return null;
-}
-
-function replaceVarsInStyle(styleValue, variables) {
-  return styleValue.replace(/var\(--([^,)]+)(?:,([^)]*))?\)/g, (match, varName, fallback) => {
-    const resolvedValue = variables[varName.trim()];
-    return resolvedValue || (fallback ? fallback.trim() : match);
-  });
-}
 
 function extractVariablesFromCSS(cssText) {
   const variables = {};
+  // Extract CSS variable definitions using regex
+  const varRegex = /(--[a-zA-Z0-9-_]+)\s*:\s*([^;}]+)/g;
+  let match;
   
-  try {
-    const ast = csstree.parse(cssText);
-    
-    csstree.walk(ast, (node) => {
-      if (node.type === 'Rule' && isRootRule(node)) {
-        extractVariablesFromRule(node, variables);
-      }
-    });
-  } catch (error) {
-    console.error('Warning: Could not parse CSS for variable extraction:', error.message);
+  while ((match = varRegex.exec(cssText)) !== null) {
+    const varName = match[1].substring(2); // Remove --
+    const value = match[2].trim();
+    variables[varName] = value;
   }
   
   return variables;
 }
 
-function isRootRule(node) {
-  if (!node.prelude?.children) return false;
-  let hasRoot = false;
-  csstree.walk(node.prelude, (child) => {
-    if (child.type === 'PseudoClassSelector' && child.name === 'root') hasRoot = true;
-  });
-  return hasRoot;
+function resolveVariableToLiteral(varName, variables, visited = new Set()) {
+  // Prevent infinite recursion
+  if (visited.has(varName)) {
+    return null;
+  }
+  visited.add(varName);
+  
+  const value = variables[varName];
+  if (!value) {
+    return null;
+  }
+  
+  // Check if value is a var() reference
+  const varMatch = value.match(/var\s*\(\s*--([^,)]+)(?:\s*,\s*([^)]*))?\s*\)/);
+  if (varMatch) {
+    const referencedVar = varMatch[1].trim();
+    const fallback = varMatch[2] ? varMatch[2].trim() : null;
+    
+    // Recursively resolve the referenced variable
+    const resolvedValue = resolveVariableToLiteral(referencedVar, variables, visited);
+    return resolvedValue || fallback || null;
+  }
+  
+  // It's already a literal value
+  return value;
 }
 
-function extractVariablesFromRule(ruleNode, variables) {
-  csstree.walk(ruleNode, (node) => {
-    if (node.type === 'Declaration' && node.property.startsWith('--')) {
-      const varName = node.property.substring(2);
-      const value = csstree.generate(node.value);
-      variables[varName] = value;
-    }
+function resolveVarReference(value, variables) {
+  const varMatch = value.match(/var\s*\(\s*--([^,)]+)(?:\s*,\s*([^)]*))?\s*\)/);
+  if (varMatch) {
+    const varName = varMatch[1].trim();
+    const fallback = varMatch[2] ? varMatch[2].trim() : null;
+    
+    // Resolve the variable to its final literal value
+    const resolvedValue = resolveVariableToLiteral(varName, variables);
+    return resolvedValue || fallback || null;
+  }
+  return null;
+}
+
+function replaceVarsInStyle(styleValue, variables) {
+  return styleValue.replace(/var\s*\(\s*--([^,)]+)(?:\s*,\s*([^)]*))?\s*\)/g, (match, varName, fallback) => {
+    const resolvedValue = resolveVariableToLiteral(varName.trim(), variables);
+    return resolvedValue || (fallback ? fallback.trim() : match);
   });
 }
 
@@ -65,7 +72,7 @@ function applyStyles(svgContent) {
   
   if (!svgElement) throw new Error('No SVG element found');
   
-  // Extract variables from current style elements
+  // Extract variables from all style elements
   const styleElements = document.querySelectorAll('style');
   let allVariables = {};
   
@@ -77,21 +84,24 @@ function applyStyles(svgContent) {
     }
   });
   
-  // Apply variables to SVG attributes
+  // Apply variables to SVG attributes (but don't modify <style> content)
   document.querySelectorAll('*').forEach(element => {
     // Process fill/stroke attributes with var() references
     ['fill', 'stroke'].forEach(attr => {
       const value = element.getAttribute(attr);
       if (value && value.includes('var(')) {
         const resolved = resolveVarReference(value, allVariables);
-        if (resolved) element.setAttribute(attr, resolved);
+        if (resolved) {
+          element.setAttribute(attr, resolved);
+        }
       }
     });
     
     // Process style attributes
     const style = element.getAttribute('style');
     if (style && style.includes('var(')) {
-      element.setAttribute('style', replaceVarsInStyle(style, allVariables));
+      const resolvedStyle = replaceVarsInStyle(style, allVariables);
+      element.setAttribute('style', resolvedStyle);
     }
     
     // Process class-based styling
@@ -99,8 +109,9 @@ function applyStyles(svgContent) {
     if (className) {
       const possibleVars = [className, className.replace('-', '_')];
       for (const varName of possibleVars) {
-        if (allVariables[varName]) {
-          element.setAttribute('fill', allVariables[varName]);
+        const resolvedValue = resolveVariableToLiteral(varName, allVariables);
+        if (resolvedValue) {
+          element.setAttribute('fill', resolvedValue);
           break;
         }
       }
